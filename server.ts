@@ -1,3 +1,9 @@
+/**
+ * Servidor MCP de Catastro Uruguay
+  * @author Angel Eduardo Galindez
+   * @version 1.0.0
+    * @description Servidor MCP para consulta de datos catastrales públicos de Uruguay
+     */
 import { createServer, IncomingMessage, ServerResponse } from "node:http";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
