@@ -5,11 +5,12 @@
     "type": "module",
     "description": "Servidor MCP de Catastro Uruguay para ChatGPT",
     "scripts": {
-        "build": "esbuild server.ts --bundle --platform=node --format=esm --outfile=dist/server.js --packages=external",
+        "build": "esbuild server.ts --bundle --platform=node --format=esm --outfile=dist/server.js",
         "start": "node dist/server.js"
     },
     "dependencies": {
-        "@modelcontextprotocol/sdk": "^1.20.2"
+        "@modelcontextprotocol/sdk": "^1.10.0",
+        "zod": "^3.24.0"
     },
     "devDependencies": {
         "@types/node": "^24.3.0",
