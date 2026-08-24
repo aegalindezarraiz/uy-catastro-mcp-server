@@ -1,0 +1,103 @@
+# Catastro Uruguay MCP
+
+## Value Proposition
+
+Consultar por conversación los datos alfanuméricos públicos de padrones urbanos y rurales publicados por la Dirección Nacional de Catastro (DNC), con trazabilidad del corte mensual y sin presentar datos orientativos o inventados como si fueran oficiales.
+
+**Usuarios principales:** operador inmobiliario, analista OSINT inmobiliario y profesional que necesita una verificación catastral preliminar.
+
+**Dolor actual:** la consulta manual exige conocer la estructura catastral, distinguir localidad urbana de sección rural y comprobar la vigencia del dataset. El servidor anterior devolvía cuatro registros de demostración incrustados, sin cobertura nacional real.
+
+**Acciones principales:**
+
+1. Buscar uno o varios registros catastrales candidatos por departamento y padrón.
+2. Comparar registros oficiales con campos homogéneos y trazables.
+3. Generar un brief preliminar con límites, vacíos y próximos controles oficiales.
+
+## Why LLM?
+
+**Ventaja conversacional:** el usuario puede pedir “padrón 12345 de Montevideo” o comparar varios padrones sin conocer los códigos internos de departamento, localidad o régimen.
+
+**Aporte del LLM:** interpreta intención, solicita localidad/sección/unidad cuando hay ambigüedad y resume resultados y límites de uso.
+
+**Lo que el LLM no posee:** el snapshot oficial DNC, su esquema, trazabilidad mensual y capacidad de consultar el índice nacional.
+
+## UI Overview
+
+No se incorpora una vista gráfica en esta versión. Los inputs son naturalmente conversacionales y los resultados son registros estructurados breves. Una futura vista de comparación o mapa queda fuera de alcance.
+
+## Product Context
+
+- **Producto existente:** MCP HTTP desplegado en Render y conectado a ChatGPT.
+- **Fuente primaria:** conjunto “Padrones urbanos y rurales” del Catálogo de Datos Abiertos de Uruguay, mantenido por la DNC.
+- **Corte objetivo:** recurso oficial más reciente disponible durante el build; para esta versión, 08/2026.
+- **Licencia:** Licencia de Datos Abiertos de Uruguay declarada por el dataset.
+- **Autenticación:** no requerida para el dataset público ni para las consultas MCP.
+- **Restricciones de datos:**
+  - El dataset no contiene dirección postal, titularidad, gravámenes, hipotecas ni deuda tributaria.
+  - El padrón urbano es identificado dentro de una localidad; el número de padrón por departamento puede producir múltiples candidatos.
+  - El padrón rural usa sección catastral.
+  - La presencia en un snapshot no equivale a certificación legal de vigencia o titularidad.
+  - La cédula catastral es el documento con valor legal para certificar el valor catastral base.
+
+## UX Flows
+
+### Buscar padrón
+
+1. Proporcionar departamento y número de padrón.
+2. Aplicar filtros opcionales de régimen, localidad, sección, block, piso o unidad.
+3. Devolver cero, uno o varios candidatos con trazabilidad de fuente.
+
+### Comparar padrones
+
+1. Proporcionar dos o más referencias.
+2. Resolver cada referencia con los mismos criterios de búsqueda.
+3. Devolver coincidencias, ambigüedades y faltantes sin seleccionar silenciosamente un candidato.
+
+### Generar brief preliminar
+
+1. Resolver la referencia catastral.
+2. Si es única, generar resumen de superficie, valores catastrales y régimen.
+3. Si es ambigua, devolver los filtros necesarios para desambiguar.
+4. Incluir límites y controles oficiales pendientes.
+
+### Comprobar frescura
+
+1. Consultar el manifiesto de ingestión.
+2. Devolver corte, fecha de publicación, recurso, conteos, modo y estado de disponibilidad.
+
+## Tools
+
+### `uy_catastro_lookup_padron`
+
+- **Input:** departamento, padrón y filtros catastrales opcionales.
+- **Output:** `found`, `ambiguous`, `matches[]`, filtros aplicados y trazabilidad.
+
+### `uy_catastro_compare_padrones`
+
+- **Input:** lista de referencias de padrón con filtros opcionales.
+- **Output:** resultados por referencia, coincidencias, ambigüedades y faltantes.
+
+### `uy_catastro_get_dataset_status`
+
+- **Input:** ninguno.
+- **Output:** modo, corte, fecha de publicación, recurso, conteos y disponibilidad.
+
+### `uy_catastro_get_official_guide`
+
+- **Input:** tema.
+- **Output:** guía breve, límites y enlaces oficiales.
+
+### `uy_catastro_build_due_diligence_brief`
+
+- **Input:** referencia catastral y filtros opcionales.
+- **Output:** brief preliminar solo cuando la referencia queda resuelta de forma única.
+
+## Safety and Evidence Rules
+
+- No devolver datos demo en producción.
+- No fabricar direcciones, estado de vigencia, valor de mercado, titularidad o cargas.
+- Identificar expresamente el corte mensual y la fuente de cada resultado.
+- No llamar “valor real de mercado” al valor catastral.
+- No presentar el brief como certificado, tasación ni estudio de títulos.
+- Ante ambigüedad, devolver candidatos y pedir el dato faltante.

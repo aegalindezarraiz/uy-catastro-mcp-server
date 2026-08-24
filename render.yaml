@@ -1,12 +1,12 @@
 services:
   - type: web
-      name: uy-catastro-mcp
-          env: node
-              buildCommand: npm install && npm run build
-                  startCommand: npm start
-                      healthCheckPath: /health
-                          envVars:
-                                - key: PORT
-                                        value: 10000
-                                              - key: CATASTRO_MODE
-                                                      value: demo
+    name: uy-catastro-mcp-server
+    env: node
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: NODE_VERSION
+        value: 22.18.0
