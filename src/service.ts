@@ -1,4 +1,5 @@
 import type { CatastroRecord, PadronQuery } from "./domain.js";
+import { estimateAvm, type AvmComparable, type AvmOptions, type AvmProperty } from "./avm.js";
 
 const CEDULA_ISSUER_URL = "https://apls2.catastro.gub.uy:8443/integralevol3produccion/servlet/gub.catastro.integralevol3produccion.apwebimpresioncedulasgeocatastro?";
 const VISOR_DNC_ARCGIS_URL = "http://gis.catastro.gub.uy/arcgis/rest/services/v2022/Mapa_Base_DNCv_11_2022Prod/MapServer";
@@ -195,6 +196,45 @@ export async function makeRegisteredPlansOutput(result: LookupResult, fetchImpl:
   };
 }
 
+export type AvmRequest = {
+  valuation_date?: string;
+  subject: Omit<AvmProperty, "area_m2"> & { area_m2?: number };
+  comparables: AvmComparable[];
+  options?: AvmOptions;
+};
+
+export function makeAvmOutput(result: LookupResult, request: AvmRequest) {
+  if (result.matches.length !== 1) {
+    const reason = result.matches.length === 0 ? "not_found" as const : "ambiguous" as const;
+    const text = reason === "not_found"
+      ? `No se puede ejecutar el AVM: no se encontró el padrón ${result.query.padron}.`
+      : `No se puede ejecutar el AVM: la referencia devuelve ${result.matches.length} candidatos. Indique localidad, sección, block, piso o unidad.`;
+    return {
+      content: [{ type: "text" as const, text }],
+      structuredContent: { ok: false as const, reason, lookup: result },
+    };
+  }
+  const cadastralRecord = result.matches[0] as CatastroRecord;
+  const cadastralArea = request.subject.property_type === "land"
+    ? cadastralRecord.area_land_m2
+    : cadastralRecord.area_built_m2 ?? cadastralRecord.area_land_m2;
+  const areaM2 = request.subject.area_m2 ?? cadastralArea;
+  if (!areaM2 || !Number.isFinite(areaM2) || areaM2 <= 0) {
+    return {
+      content: [{ type: "text" as const, text: "No se puede ejecutar el AVM: falta una superficie válida y Catastro no aporta una utilizable para este inmueble." }],
+      structuredContent: { ok: false as const, reason: "missing_subject_area" as const, cadastral_record: cadastralRecord, lookup: result },
+    };
+  }
+  const avm = estimateAvm({ ...request, subject: { ...request.subject, area_m2: areaM2 } });
+  const text = avm.ok
+    ? `AVM D3 orientativo: USD ${avm.estimated_value_usd.toLocaleString("en-US")} (rango ${avm.range_usd.confidence_level}: USD ${avm.range_usd.low.toLocaleString("en-US")}–${avm.range_usd.high.toLocaleString("en-US")}); confianza ${avm.confidence.grade} (${avm.confidence.score}/100). No es una tasación certificada.`
+    : `No se pudo calcular el AVM: quedaron ${avm.comparables.used} testigos válidos y se requieren al menos 3.`;
+  return {
+    content: [{ type: "text" as const, text }],
+    structuredContent: { ...avm, cadastral_record: cadastralRecord, area_source: request.subject.area_m2 ? "user" : "dnc_snapshot", lookup: result },
+  };
+}
+
 function recordLabel(record: Partial<CatastroRecord> & { department: string; padron: string }): string {
   const place = record.locality ? `localidad ${record.locality}` : `sección ${record.section ?? "N/D"}`;
   const unit = record.unit !== null && record.unit !== undefined ? `, unidad ${record.unit}` : "";
@@ -222,6 +262,7 @@ export function officialGuide(topic: string) {
   const dataset = { title: "Dataset oficial DNC — Padrones urbanos y rurales", url: "https://catalogodatos.gub.uy/dataset/direccion-nacional-de-catastro-padrones-urbanos-y-rurales" };
   const cedula = { title: "Cédula catastral", url: "https://www.gub.uy/tramites/cedula-catastral" };
   const informed = { title: "Cédula catastral informada", url: "https://www.gub.uy/tramites/cedula-catastral-informada" };
+  const bcuHedonic = { title: "BCU — modelos hedónicos de precios de inmuebles", url: "https://www.bcu.gub.uy/Estadisticas-e-Indicadores/Documentos%20de%20Trabajo/11.2013.pdf" };
   const guides: Record<string, { text: string; links: Array<{ title: string; url: string }> }> = {
     general: {
       text: "Este MCP consulta un snapshot de datos abiertos de la DNC. Sirve para verificación preliminar; no sustituye certificados, estudio de títulos, información registral ni control de deudas.",
@@ -242,6 +283,10 @@ export function officialGuide(topic: string) {
     data_source: {
       text: "La fuente es el conjunto mensual de padrones urbanos y rurales publicado por la Dirección Nacional de Catastro en el Catálogo de Datos Abiertos de Uruguay.",
       links: [dataset],
+    },
+    avm: {
+      text: "El AVM D3 exige testigos verificables de venta u oferta, limpia anomalías y devuelve intervalo, confianza y ajustes. Es una estimación automatizada orientativa: no es una tasación, certificado ni garantía del precio de cierre.",
+      links: [dataset, bcuHedonic],
     },
   };
   return guides[topic] ?? guides.general;

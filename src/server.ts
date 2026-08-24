@@ -6,10 +6,10 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { z } from "zod";
 
 import { buildDueDiligenceBrief, type PadronQuery } from "./domain.js";
-import { makeCedulaOutput, makeLookupOutput, makeRegisteredPlansOutput, officialGuide } from "./service.js";
+import { makeAvmOutput, makeCedulaOutput, makeLookupOutput, makeRegisteredPlansOutput, officialGuide } from "./service.js";
 import { CatastroStore } from "./store.js";
 
-const VERSION = "2.1.0";
+const VERSION = "2.2.0";
 const PORT = Number(process.env.PORT ?? 8787);
 const MCP_PATH = "/mcp";
 const databasePath = resolve(process.env.CATASTRO_DB_PATH ?? "dist/data/catastro.sqlite");
@@ -29,6 +29,43 @@ const querySchema = {
   floor: z.string().optional().describe("Entrepiso o subsuelo"),
   unit: z.number().int().nonnegative().optional().describe("Unidad de propiedad horizontal"),
 };
+const propertyTypeSchema = z.enum(["apartment", "house", "land", "commercial", "other"]);
+const conditionSchema = z.enum(["new", "excellent", "good", "fair", "poor", "unknown"]);
+const environmentSchema = z.object({
+  schools_1km: z.number().int().nonnegative().optional(),
+  transit_stops_500m: z.number().int().nonnegative().optional(),
+  parks_1km: z.number().int().nonnegative().optional(),
+  shops_1km: z.number().int().nonnegative().optional(),
+  crime_index: z.number().min(0).max(100).optional().describe("Índice 0–100; mayor significa más criminalidad"),
+  score: z.number().min(0).max(100).optional().describe("Puntaje compuesto ya calculado, si existe"),
+  measured_at: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  source_urls: z.array(z.string().url()).max(20).optional(),
+});
+const propertySchema = {
+  property_type: propertyTypeSchema,
+  bedrooms: z.number().int().nonnegative().max(100).optional(),
+  bathrooms: z.number().int().nonnegative().max(100).optional(),
+  parking_spaces: z.number().int().nonnegative().max(100).optional(),
+  construction_year: z.number().int().min(1700).max(2100).optional(),
+  condition: conditionSchema.optional(),
+  latitude: z.number().min(-90).max(90).optional(),
+  longitude: z.number().min(-180).max(180).optional(),
+  environment: environmentSchema.optional(),
+};
+const avmSubjectSchema = z.object({
+  ...propertySchema,
+  area_m2: z.number().positive().max(100_000_000).optional().describe("Opcional; si falta se usa superficie DNC compatible"),
+});
+const avmComparableSchema = z.object({
+  ...propertySchema,
+  area_m2: z.number().positive().max(100_000_000),
+  id: z.string().min(1).max(200),
+  source_kind: z.enum(["sold", "listing"]),
+  source_url: z.string().url(),
+  observed_at: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  price_usd: z.number().positive().max(1_000_000_000),
+  distance_m: z.number().nonnegative().max(1_000_000).optional(),
+});
 
 function asQuery(input: Record<string, unknown>): PadronQuery {
   return {
@@ -67,6 +104,33 @@ function createCatastroServer(): McpServer {
     annotations: { readOnlyHint: true, openWorldHint: true, destructiveHint: false },
   }, async (input) => makeRegisteredPlansOutput(store.lookup(asQuery(input))));
 
+  server.registerTool("uy_catastro_estimate_avm", {
+    title: "Estimar valor inmobiliario — AVM D3",
+    description: "Calcula una estimación orientativa y trazable en USD para un padrón único usando características, entorno y 3–100 testigos verificables. Limpia anomalías, ajusta comparables y agrega regresión ridge con muestra suficiente. No es una tasación certificada.",
+    inputSchema: {
+      ...querySchema,
+      valuation_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+      subject: avmSubjectSchema,
+      comparables: z.array(avmComparableSchema).min(3).max(100),
+      options: z.object({
+        listing_price_factor: z.number().min(0.5).max(1.1).optional(),
+        annual_market_trend_pct: z.number().min(-50).max(100).optional(),
+        size_elasticity: z.number().min(-1).max(1).optional(),
+        condition_step_pct: z.number().min(0).max(20).optional(),
+        parking_space_pct: z.number().min(0).max(20).optional(),
+        environment_point_pct: z.number().min(0).max(2).optional(),
+        max_age_months: z.number().int().min(1).max(120).optional(),
+        max_distance_m: z.number().positive().max(1_000_000).optional(),
+      }).optional(),
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false, destructiveHint: false },
+  }, async (input) => makeAvmOutput(store.lookup(asQuery(input)), {
+    ...(input.valuation_date ? { valuation_date: input.valuation_date } : {}),
+    subject: input.subject,
+    comparables: input.comparables,
+    ...(input.options ? { options: input.options } : {}),
+  }));
+
   server.registerTool("uy_catastro_compare_padrones", {
     title: "Comparar padrones DNC",
     description: "Compara de 2 a 20 referencias catastrales sin resolver silenciosamente las ambiguas.",
@@ -102,7 +166,7 @@ function createCatastroServer(): McpServer {
     title: "Guía oficial de Catastro",
     description: "Explica alcance, límites y trámites oficiales aplicables.",
     inputSchema: {
-      topic: z.enum(["general", "valor_legal", "due_diligence", "propiedad_horizontal", "data_source"]).optional(),
+      topic: z.enum(["general", "valor_legal", "due_diligence", "propiedad_horizontal", "data_source", "avm"]).optional(),
     },
     annotations: { readOnlyHint: true, openWorldHint: false, destructiveHint: false },
   }, async (input) => {

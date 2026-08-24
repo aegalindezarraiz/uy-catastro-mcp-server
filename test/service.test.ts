@@ -25,3 +25,10 @@ test("officialGuide directs legal-value requests to the official cadastral certi
   assert.match(guide.text, /valor legal/i);
   assert.equal(guide.links[0].url, "https://www.gub.uy/tramites/cedula-catastral");
 });
+
+test("officialGuide explains the AVM evidence and certification limits", () => {
+  const guide = officialGuide("avm");
+  assert.match(guide.text, /testigos/i);
+  assert.match(guide.text, /no es una tasación/i);
+  assert.ok(guide.links.some((link) => /BCU/.test(link.title)));
+});

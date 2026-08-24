@@ -250,8 +250,47 @@ test("makeRegisteredPlansOutput returns registered-plan metadata and the officia
   assert.equal(result.content[1].uri, "https://planos.mtop.gub.uy/pesgpm/servlet/hconsulta");
 });
 
-test("the MCP registers tools for cadastral certificate issuance and registered plans", () => {
+test("the MCP registers tools for cadastral certificate issuance, registered plans and AVM", () => {
   const serverSource = readFileSync(new URL("../src/server.ts", import.meta.url), "utf8");
   assert.match(serverSource, /registerTool\("uy_catastro_emit_cedula_catastral"/);
   assert.match(serverSource, /registerTool\("uy_catastro_get_registered_plans"/);
+  assert.match(serverSource, /registerTool\("uy_catastro_estimate_avm"/);
+});
+
+test("makeAvmOutput refuses ambiguous cadastral references", async () => {
+  const makeOutput = (service as Record<string, unknown>).makeAvmOutput;
+  assert.equal(typeof makeOutput, "function");
+  const result = await (makeOutput as Function)({
+    found: true,
+    ambiguous: true,
+    query: { department: "MONTEVIDEO", padron: "539" },
+    matches: [record(), record({ locality_code: "AB", locality: "OTRA" })],
+  }, { subject: { property_type: "apartment" }, comparables: [] });
+  assert.equal(result.structuredContent.ok, false);
+  assert.equal(result.structuredContent.reason, "ambiguous");
+});
+
+test("makeAvmOutput uses the resolved DNC built area and returns an auditable estimate", () => {
+  const comparables = [1, 2, 3].map((number) => ({
+    id: `c${number}`,
+    source_kind: "sold" as const,
+    source_url: `https://evidence.test/c${number}`,
+    observed_at: "2026-07-01",
+    price_usd: 150_000 + number * 5_000,
+    area_m2: 78 + number,
+    property_type: "apartment" as const,
+    distance_m: number * 100,
+  }));
+  const result = service.makeAvmOutput({
+    found: true,
+    ambiguous: false,
+    query: { department: "MONTEVIDEO", padron: "539" },
+    matches: [record({ area_built_m2: 80 })],
+  }, { subject: { property_type: "apartment" }, comparables, valuation_date: "2026-08-24" });
+
+  assert.equal(result.structuredContent.ok, true);
+  assert.equal(result.structuredContent.area_source, "dnc_snapshot");
+  assert.equal(result.structuredContent.cadastral_record.area_built_m2, 80);
+  assert.match(result.content[0].text, /orientativo/i);
+  assert.match(result.content[0].text, /no es una tasación/i);
 });

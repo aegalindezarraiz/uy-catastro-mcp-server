@@ -15,6 +15,7 @@ Consultar por conversación los datos alfanuméricos públicos de padrones urban
 3. Generar un brief preliminar con límites, vacíos y próximos controles oficiales.
 4. Emitir una cédula catastral común oficial para una referencia resuelta de forma única.
 5. Consultar planos registrados y metadatos de agrimensor en el Visor DNC.
+6. Estimar un rango de valor de mercado mediante un AVM D3 trazable, usando características del inmueble, entorno y testigos aportados con evidencia.
 
 ## Why LLM?
 
@@ -44,6 +45,9 @@ No se incorpora una vista gráfica en esta versión. Los inputs son naturalmente
   - La cédula catastral es el documento con valor legal para certificar el valor catastral base.
   - La cédula común es distinta de la cédula catastral informada; esta última requiere usuario, solicitud y pago en Sede Electrónica.
   - El Visor DNC expone metadatos de planos; el acceso a sus imágenes es provisto y mantenido por el Archivo Gráfico del MTOP.
+  - No se identificó una fuente pública nacional de compraventas urbanas a nivel de inmueble. El AVM no inventa ventas: exige testigos proporcionados por el usuario o por un proveedor autorizado.
+  - Los precios de oferta no equivalen a precios de cierre. El factor oferta/venta aplicado debe quedar explícito en el resultado.
+  - Los indicadores de entorno pueden tener cobertura territorial y fechas diferentes; cada snapshot debe declarar fuente y fecha de medición.
 
 ## UX Flows
 
@@ -85,6 +89,15 @@ No se incorpora una vista gráfica en esta versión. Los inputs son naturalmente
 3. Consultar planes y agrimensores en las tablas públicas del Visor DNC.
 4. Devolver número de registro, fecha, tipo y agrimensor, más el enlace al Archivo Gráfico del MTOP.
 
+### Estimar valor de mercado con AVM D3
+
+1. Resolver una única referencia catastral y completar las superficies disponibles desde el snapshot DNC.
+2. Recibir características del inmueble, un snapshot opcional del entorno y entre 3 y 100 testigos de venta u oferta con procedencia.
+3. Rechazar testigos inválidos, duplicados, futuros, antiguos, lejanos, de otro tipo de propiedad o atípicos por precio/m² mediante MAD robusta.
+4. Ajustar cada testigo por oferta/venta, fecha, superficie, estado, estacionamiento y entorno, declarando cada factor aplicado.
+5. Calcular un enfoque robusto por comparables y, cuando la muestra lo permite, una regresión hedónica ridge; combinar ambos sin usar una red neuronal no calibrada.
+6. Devolver estimación en USD, rango de incertidumbre, precio/m², confianza, modelos usados, testigos usados/descartados, advertencias y supuestos.
+
 ## Tools
 
 ### `uy_catastro_lookup_padron`
@@ -122,6 +135,12 @@ No se incorpora una vista gráfica en esta versión. Los inputs son naturalmente
 - **Input:** departamento, padrón y filtros catastrales opcionales.
 - **Output:** lista de planos registrados con fecha y agrimensor, fuente Visor DNC y acceso al Archivo Gráfico MTOP.
 
+### `uy_catastro_estimate_avm`
+
+- **Input:** referencia catastral; tipo y características del inmueble; entorno opcional; testigos verificables de venta/oferta; fecha y parámetros técnicos opcionales.
+- **Output:** `ok`, estimación/rango USD, precio por m², confianza, modelos, testigos normalizados con ajustes, descartes con motivos, supuestos, advertencias y registro DNC usado.
+- **Behavior:** requiere referencia única y al menos 3 testigos válidos tras limpieza; usa MAD robusta, ponderación por fuente/recencia/distancia/similitud y regresión ridge solo con muestra suficiente.
+
 ## Safety and Evidence Rules
 
 - No devolver datos demo en producción.
@@ -133,3 +152,9 @@ No se incorpora una vista gráfica en esta versión. Los inputs son naturalmente
 - No emitir cédula ni consultar planos si la referencia no queda resuelta de forma única.
 - Aceptar como PDF oficial únicamente redirecciones al dominio `apls2.catastro.gub.uy`.
 - No presentar metadatos del Visor como copia certificada del plano.
+- No llamar “tasación”, “certificado” ni “valor real” al resultado AVM; es una estimación automatizada orientativa.
+- No usar valor catastral como sustituto silencioso del valor de mercado.
+- No aceptar testigos sin identificador, clase de fuente, fecha, precio, superficie y URL de procedencia.
+- No mezclar tipos de propiedad; no usar testigos rechazados en el cálculo.
+- Mostrar todos los factores y supuestos; si no hay ventas cerradas, limitar la confianza y advertir que el resultado se apoya en oferta.
+- No usar una red neuronal hasta disponer de una muestra amplia de ventas verificadas y validación fuera de muestra.
