@@ -6,10 +6,10 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { z } from "zod";
 
 import { buildDueDiligenceBrief, type PadronQuery } from "./domain.js";
-import { makeLookupOutput, officialGuide } from "./service.js";
+import { makeCedulaOutput, makeLookupOutput, makeRegisteredPlansOutput, officialGuide } from "./service.js";
 import { CatastroStore } from "./store.js";
 
-const VERSION = "2.0.0";
+const VERSION = "2.1.0";
 const PORT = Number(process.env.PORT ?? 8787);
 const MCP_PATH = "/mcp";
 const databasePath = resolve(process.env.CATASTRO_DB_PATH ?? "dist/data/catastro.sqlite");
@@ -52,6 +52,20 @@ function createCatastroServer(): McpServer {
     inputSchema: querySchema,
     annotations: { readOnlyHint: true, openWorldHint: false, destructiveHint: false },
   }, async (input) => makeLookupOutput(store.lookup(asQuery(input))));
+
+  server.registerTool("uy_catastro_emit_cedula_catastral", {
+    title: "Emitir cédula catastral DNC",
+    description: "Resuelve una referencia catastral única y emite la cédula catastral común oficial en PDF mediante la DNC. No emite la cédula informada, que requiere un trámite autenticado independiente.",
+    inputSchema: querySchema,
+    annotations: { readOnlyHint: false, openWorldHint: true, destructiveHint: false },
+  }, async (input) => makeCedulaOutput(store.lookup(asQuery(input))));
+
+  server.registerTool("uy_catastro_get_registered_plans", {
+    title: "Consultar planos registrados",
+    description: "Consulta en vivo el Visor DNC y devuelve número de registro, fecha y agrimensor de los planos asociados a un padrón. El acceso a imágenes depende del Archivo Gráfico del MTOP.",
+    inputSchema: querySchema,
+    annotations: { readOnlyHint: true, openWorldHint: true, destructiveHint: false },
+  }, async (input) => makeRegisteredPlansOutput(store.lookup(asQuery(input))));
 
   server.registerTool("uy_catastro_compare_padrones", {
     title: "Comparar padrones DNC",

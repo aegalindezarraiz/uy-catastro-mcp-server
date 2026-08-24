@@ -1,11 +1,199 @@
 import type { CatastroRecord, PadronQuery } from "./domain.js";
 
-type LookupResult = {
+const CEDULA_ISSUER_URL = "https://apls2.catastro.gub.uy:8443/integralevol3produccion/servlet/gub.catastro.integralevol3produccion.apwebimpresioncedulasgeocatastro?";
+const VISOR_DNC_ARCGIS_URL = "http://gis.catastro.gub.uy/arcgis/rest/services/v2022/Mapa_Base_DNCv_11_2022Prod/MapServer";
+const MTOP_PLAN_ARCHIVE_URL = "https://planos.mtop.gub.uy/pesgpm/servlet/hconsulta";
+const VISOR_DEPARTMENT_NUMBER: Record<string, number> = {
+  A: 1, B: 2, C: 3, D: 4, E: 5, F: 6, G: 7, H: 8, I: 9, J: 10,
+  K: 11, L: 12, M: 13, N: 14, O: 15, P: 16, Q: 17, R: 18, V: 19,
+};
+const VISOR_PAIRED_LOCALITY: Record<number, number> = { 405: 406, 400: 401, 397: 398, 390: 391 };
+
+export function buildCedulaCatastralIssueUrl(record: CatastroRecord): string {
+  if (record.regime === "RU") {
+    if (record.department_code === "V") {
+      return `${CEDULA_ISSUER_URL}C,V,AA,${record.padron},,,`;
+    }
+    return `${CEDULA_ISSUER_URL}R,${record.department_code},,${record.padron},,,`;
+  }
+  if (record.regime === "PH") {
+    return `${CEDULA_ISSUER_URL}H,${record.department_code},${record.locality_code ?? ""},${record.padron},${record.block ?? ""},${record.floor ?? ""},${record.unit ?? ""}`;
+  }
+  if (record.regime === "UH") {
+    return `${CEDULA_ISSUER_URL}U,${record.department_code},${record.locality_code ?? ""},${record.padron},${record.block ?? ""},,${record.unit ?? ""}`;
+  }
+  return `${CEDULA_ISSUER_URL}C,${record.department_code},${record.locality_code},${record.padron},,,`;
+}
+
+export async function issueCedulaCatastral(record: CatastroRecord, fetchImpl: typeof fetch = fetch) {
+  const issuanceUrl = buildCedulaCatastralIssueUrl(record);
+  const response = await fetchImpl(issuanceUrl, { redirect: "manual" });
+  const location = response.headers.get("location");
+  if (![301, 302, 303, 307, 308].includes(response.status) || !location) {
+    throw new Error(`DNC cedula issuer returned HTTP ${response.status} without a PDF redirect`);
+  }
+  const pdfUrl = new URL(location, issuanceUrl);
+  if (pdfUrl.origin !== new URL(CEDULA_ISSUER_URL).origin || !pdfUrl.pathname.endsWith(".pdf")) {
+    throw new Error("DNC cedula issuer returned an unsafe PDF location");
+  }
+  return {
+    ok: true as const,
+    document_type: "cedula_catastral_comun" as const,
+    issuance_url: issuanceUrl,
+    pdf_url: pdfUrl.toString(),
+    source: "Direccion Nacional de Catastro",
+  };
+}
+
+type ArcGisFeature = { attributes: Record<string, string | number | null> };
+
+async function fetchArcGisFeatures(layer: number, where: string, fetchImpl: typeof fetch): Promise<ArcGisFeature[]> {
+  const url = new URL(`${VISOR_DNC_ARCGIS_URL}/${layer}/query`);
+  url.search = new URLSearchParams({ where, outFields: "*", returnGeometry: "false", f: "json" }).toString();
+  const response = await fetchImpl(url);
+  if (!response.ok) throw new Error(`Visor DNC layer ${layer} returned HTTP ${response.status}`);
+  const payload = await response.json() as { features?: ArcGisFeature[]; error?: { message?: string } };
+  if (payload.error) throw new Error(`Visor DNC layer ${layer}: ${payload.error.message ?? "query failed"}`);
+  return payload.features ?? [];
+}
+
+function utcDate(timestamp: number): string {
+  return new Date(timestamp).toISOString().slice(0, 10);
+}
+
+export async function fetchRegisteredPlans(record: CatastroRecord, fetchImpl: typeof fetch = fetch) {
+  const departmentNumber = VISOR_DEPARTMENT_NUMBER[record.department_code];
+  if (!departmentNumber) throw new Error(`Unsupported DNC department code: ${record.department_code}`);
+  let planRows: ArcGisFeature[];
+  if (record.regime === "RU") {
+    planRows = await fetchArcGisFeatures(
+      7,
+      `TIPOPLANO = 'R' AND NUMDEPTO = ${departmentNumber} AND PLAPADRON = ${record.padron}`,
+      fetchImpl,
+    );
+  } else {
+    const localityRows = await fetchArcGisFeatures(
+      10,
+      `CODDEPTO = '${record.department_code}' AND CODLOCCAT = '${record.locality_code ?? ""}'`,
+      fetchImpl,
+    );
+    const localityNumbers = [...new Set(localityRows.flatMap((feature) => {
+      const number = Number(feature.attributes.NUMLOCCAT);
+      if (!Number.isFinite(number)) return [];
+      return VISOR_PAIRED_LOCALITY[number] ? [number, VISOR_PAIRED_LOCALITY[number]] : [number];
+    }))];
+    planRows = await fetchArcGisFeatures(
+      7,
+      `NUMLOCCAT IN (${localityNumbers.join(",")}) AND TIPOPLANO = 'U' AND PLAPADRON = ${record.padron}`,
+      fetchImpl,
+    );
+  }
+  const registryNumbers = [...new Set(planRows.map((feature) => Number(feature.attributes.PLAREGPLA)).filter(Number.isFinite))];
+  const surveyorRows = registryNumbers.length > 0
+    ? await fetchArcGisFeatures(6, `NUMDEPTO = ${departmentNumber} AND NUMREGPLANO IN (${registryNumbers.join(",")})`, fetchImpl)
+    : [];
+  const surveyors = new Map(surveyorRows.map((feature) => [
+    `${feature.attributes.NUMREGPLANO}:${feature.attributes.FECHAPLANO}`,
+    String(feature.attributes.NOMAGRIM ?? "").replaceAll("¥", "Ñ").trim() || "SIN DATOS",
+  ]));
+  const plans = planRows.map((feature) => {
+    const attributes = feature.attributes;
+    const timestamp = Number(attributes.PLAFCHREG);
+    const registryNumber = Number(attributes.PLAREGPLA);
+    return {
+      registry_number: registryNumber,
+      registration_date: utcDate(timestamp),
+      surveyor: surveyors.get(`${registryNumber}:${timestamp}`) ?? "SIN DATOS",
+      plan_type: String(attributes.TIPOPLANO ?? "U") === "R" ? "rural" : "urban",
+      department: String(attributes.NOMDEPTO ?? record.department),
+      locality: attributes.NOMLOCCAT ? String(attributes.NOMLOCCAT) : null,
+      padron: String(attributes.PLAPADRON ?? record.padron),
+    };
+  });
+  return {
+    ok: true as const,
+    plans,
+    source_url: "https://visor.catastro.gub.uy/visordnc/",
+    archive_url: MTOP_PLAN_ARCHIVE_URL,
+    provider_note: "El acceso a las imágenes de planos es provisto y mantenido por el Archivo Gráfico del MTOP.",
+  };
+}
+
+export type LookupResult = {
   found: boolean;
   ambiguous: boolean;
   query: PadronQuery;
   matches: Array<Partial<CatastroRecord> & { department: string; padron: string }>;
 };
+
+export async function makeCedulaOutput(result: LookupResult, fetchImpl: typeof fetch = fetch) {
+  if (result.matches.length !== 1) {
+    const reason = result.matches.length === 0 ? "not_found" as const : "ambiguous" as const;
+    const text = reason === "not_found"
+      ? `No se puede emitir la cédula: no se encontró el padrón ${result.query.padron}.`
+      : `No se puede emitir la cédula: la referencia devuelve ${result.matches.length} candidatos. Indique localidad, sección, block, piso o unidad.`;
+    return {
+      content: [{ type: "text" as const, text }],
+      structuredContent: { ok: false as const, reason, lookup: result },
+    };
+  }
+  const record = result.matches[0] as CatastroRecord;
+  const issued = await issueCedulaCatastral(record, fetchImpl);
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: `Cédula catastral común emitida por la DNC para el padrón ${record.padron}, ${record.department}. Es el documento oficial con valor legal; no es una cédula catastral informada.`,
+      },
+      {
+        type: "resource_link" as const,
+        uri: issued.pdf_url,
+        name: `cedula-catastral-${record.department_code}-${record.padron}.pdf`,
+        title: `Cédula catastral — padrón ${record.padron}`,
+        description: "PDF emitido por la Dirección Nacional de Catastro",
+        mimeType: "application/pdf",
+      },
+    ],
+    structuredContent: { ...issued, record, lookup: result },
+  };
+}
+
+export async function makeRegisteredPlansOutput(result: LookupResult, fetchImpl: typeof fetch = fetch) {
+  if (result.matches.length !== 1) {
+    const reason = result.matches.length === 0 ? "not_found" as const : "ambiguous" as const;
+    const text = reason === "not_found"
+      ? `No se pueden consultar planos: no se encontró el padrón ${result.query.padron}.`
+      : `No se pueden consultar planos: la referencia devuelve ${result.matches.length} candidatos. Indique localidad o sección catastral.`;
+    return {
+      content: [{ type: "text" as const, text }],
+      structuredContent: { ok: false as const, reason, lookup: result },
+    };
+  }
+  const record = result.matches[0] as CatastroRecord;
+  const registered = await fetchRegisteredPlans(record, fetchImpl);
+  const planLines = registered.plans.length === 0
+    ? "El Visor DNC no devuelve planos registrados para esta referencia."
+    : registered.plans.map((plan, index) =>
+      `${index + 1}. Registro ${plan.registry_number}; fecha ${plan.registration_date}; agrimensor: ${plan.surveyor}.`
+    ).join("\n");
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: `Planos registrados del padrón ${record.padron}, ${record.department}: ${registered.plans.length}.\n${planLines}\nEl acceso a las imágenes depende del Archivo Gráfico del MTOP.`,
+      },
+      {
+        type: "resource_link" as const,
+        uri: registered.archive_url,
+        name: "archivo-grafico-mtop",
+        title: "Archivo Gráfico del MTOP — consulta de planos",
+        description: "Servicio oficial de acceso a imágenes de planos registrados",
+        mimeType: "text/html",
+      },
+    ],
+    structuredContent: { ...registered, record, lookup: result },
+  };
+}
 
 function recordLabel(record: Partial<CatastroRecord> & { department: string; padron: string }): string {
   const place = record.locality ? `localidad ${record.locality}` : `sección ${record.section ?? "N/D"}`;

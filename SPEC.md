@@ -13,6 +13,8 @@ Consultar por conversación los datos alfanuméricos públicos de padrones urban
 1. Buscar uno o varios registros catastrales candidatos por departamento y padrón.
 2. Comparar registros oficiales con campos homogéneos y trazables.
 3. Generar un brief preliminar con límites, vacíos y próximos controles oficiales.
+4. Emitir una cédula catastral común oficial para una referencia resuelta de forma única.
+5. Consultar planos registrados y metadatos de agrimensor en el Visor DNC.
 
 ## Why LLM?
 
@@ -30,6 +32,7 @@ No se incorpora una vista gráfica en esta versión. Los inputs son naturalmente
 
 - **Producto existente:** MCP HTTP desplegado en Render y conectado a ChatGPT.
 - **Fuente primaria:** conjunto “Padrones urbanos y rurales” del Catálogo de Datos Abiertos de Uruguay, mantenido por la DNC.
+- **Fuentes en vivo complementarias:** generador de cédulas de la DNC; tablas de planos y agrimensores del Visor DNC; Archivo Gráfico del MTOP.
 - **Corte objetivo:** recurso oficial más reciente disponible durante el build; para esta versión, 08/2026.
 - **Licencia:** Licencia de Datos Abiertos de Uruguay declarada por el dataset.
 - **Autenticación:** no requerida para el dataset público ni para las consultas MCP.
@@ -39,6 +42,8 @@ No se incorpora una vista gráfica en esta versión. Los inputs son naturalmente
   - El padrón rural usa sección catastral.
   - La presencia en un snapshot no equivale a certificación legal de vigencia o titularidad.
   - La cédula catastral es el documento con valor legal para certificar el valor catastral base.
+  - La cédula común es distinta de la cédula catastral informada; esta última requiere usuario, solicitud y pago en Sede Electrónica.
+  - El Visor DNC expone metadatos de planos; el acceso a sus imágenes es provisto y mantenido por el Archivo Gráfico del MTOP.
 
 ## UX Flows
 
@@ -65,6 +70,20 @@ No se incorpora una vista gráfica en esta versión. Los inputs son naturalmente
 
 1. Consultar el manifiesto de ingestión.
 2. Devolver corte, fecha de publicación, recurso, conteos, modo y estado de disponibilidad.
+
+### Emitir cédula catastral común
+
+1. Resolver una única referencia por departamento, padrón y filtros catastrales.
+2. Rechazar referencias inexistentes o ambiguas sin emitir un documento incorrecto.
+3. Invocar el generador oficial DNC y validar que la respuesta sea un PDF en el dominio oficial.
+4. Devolver el PDF como recurso descargable y mantener trazabilidad del registro usado.
+
+### Consultar planos registrados
+
+1. Resolver una única referencia catastral.
+2. Para urbano, convertir los códigos DNC a la localidad numérica usada por el Visor; para rural, usar su numeración departamental.
+3. Consultar planes y agrimensores en las tablas públicas del Visor DNC.
+4. Devolver número de registro, fecha, tipo y agrimensor, más el enlace al Archivo Gráfico del MTOP.
 
 ## Tools
 
@@ -93,6 +112,16 @@ No se incorpora una vista gráfica en esta versión. Los inputs son naturalmente
 - **Input:** referencia catastral y filtros opcionales.
 - **Output:** brief preliminar solo cuando la referencia queda resuelta de forma única.
 
+### `uy_catastro_emit_cedula_catastral`
+
+- **Input:** departamento, padrón y filtros catastrales opcionales.
+- **Output:** cédula catastral común oficial en PDF o un error de referencia inexistente/ambigua.
+
+### `uy_catastro_get_registered_plans`
+
+- **Input:** departamento, padrón y filtros catastrales opcionales.
+- **Output:** lista de planos registrados con fecha y agrimensor, fuente Visor DNC y acceso al Archivo Gráfico MTOP.
+
 ## Safety and Evidence Rules
 
 - No devolver datos demo en producción.
@@ -101,3 +130,6 @@ No se incorpora una vista gráfica en esta versión. Los inputs son naturalmente
 - No llamar “valor real de mercado” al valor catastral.
 - No presentar el brief como certificado, tasación ni estudio de títulos.
 - Ante ambigüedad, devolver candidatos y pedir el dato faltante.
+- No emitir cédula ni consultar planos si la referencia no queda resuelta de forma única.
+- Aceptar como PDF oficial únicamente redirecciones al dominio `apls2.catastro.gub.uy`.
+- No presentar metadatos del Visor como copia certificada del plano.
